@@ -5,7 +5,8 @@
    :process-send-input
    :process-receive-output
    :process-alive-p
-   :create-process))
+   :create-process
+   :cffi-test))
 (in-package :async-process)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -48,7 +49,7 @@
   (:unix "libasyncprocess.so")
   (:windows "libasyncprocess.dll"))
 
-(cffi:use-foreign-library async-process)
+(cffi:use-foreign-library #P"/home/ethan/Documents/async-process/.libs/libasyncprocess.so")
 
 (defclass process ()
   ((process :reader process-process :initarg :process)
@@ -56,7 +57,6 @@
 
 (cffi:defcfun ("create_process" %create-process) :pointer
   (command :pointer)
-  (nonblock :boolean)
   (path :string))
 
 (cffi:defcfun ("delete_process" %delete-process) :void
@@ -65,9 +65,20 @@
 (cffi:defcfun ("process_pid" %process-pid) :int
   (process :pointer))
 
-(cffi:defcfun ("process_send_input" %process-send-input) :void
+(cffi:defcfun ("process_write" %process-write) :void
+  (process :pointer)
+  (string :string)
+  (n :size))
+
+(cffi:defcfun ("process_write_string" %process-write-string) :void
   (process :pointer)
   (string :string))
+
+(cffi:defcfun ("process_receive_stdout" %process-receive-stdout) :pointer
+  (process :pointer))
+
+(cffi:defcfun ("process_receive_stderr" %process-receive-stderr) :pointer
+  (process :pointer))
 
 (cffi:defcfun ("process_receive_output" %process-receive-output) :pointer
   (process :pointer))
@@ -75,7 +86,9 @@
 (cffi:defcfun ("process_alive_p" %process-alive-p) :boolean
   (process :pointer))
 
-(defun create-process (command &key nonblock (encode cffi:*default-foreign-encoding*) directory)
+(cffi:defcfun "cffi_test" :string)
+
+(defun create-process (command &key (encode cffi:*default-foreign-encoding*) directory)
   (when (and directory (not (uiop:directory-exists-p directory)))
     (error "Directory ~S does not exist" directory))
   (let* ((command (uiop:ensure-list command))
@@ -85,9 +98,9 @@
             :for c :in command
             :do (setf (cffi:mem-aref argv :string i) c))
       (setf (cffi:mem-aref argv :string length) (cffi:null-pointer))
-      (let ((p (%create-process argv nonblock (if directory
-                                                  (namestring directory)
-                                                  (cffi:null-pointer)))))
+      (let ((p (%create-process argv (if directory
+                                         (namestring directory)
+                                         (cffi:null-pointer)))))
         (if (cffi:null-pointer-p p)
             (error "create-process failed: ~S" command)
             (make-instance 'process :process p :encode encode))))))
@@ -100,7 +113,7 @@
 
 (defun process-send-input (process string)
   (let ((cffi:*default-foreign-encoding* (process-encode process)))
-    (%process-send-input (process-process process) string)))
+    (%process-write-string (process-process process) string)))
 
 (defun pointer-to-string (pointer)
   (unless (cffi:null-pointer-p pointer)
@@ -116,9 +129,21 @@
           ;; Fallback when an error occurs with UTF-8 encoding
           (map 'string #'code-char octets))))))
 
-(defun process-receive-output (process)
-  (let ((cffi:*default-foreign-encoding* (process-encode process)))
-    (pointer-to-string (%process-receive-output (process-process process)))))
+(defun process-receive-output (process &optional (source :both))
+  "`source` can be either `:stdout`, `:stderr`, or `:both`.   It specifies the stream
+to read from."
+  (flet ((call-cfun (read-func)
+           "helper function to call one of the three cffi functions for receiving output."
+           (let ((cffi:*default-foreign-encoding* (process-encode process))
+                 (output (funcall read-func (process-process process))))
+             (prog1 
+                 (pointer-to-string output)
+               (cffi:foreign-free output)))))
+    
+    (case source
+      (:stdout (call-cfun '%process-receive-stdout))
+      (:stderr (call-cfun '%process-receive-stderr))
+      (:both (call-cfun '%process-receive-output)))))
 
 (defun process-alive-p (process)
   (%process-alive-p (process-process process)))
