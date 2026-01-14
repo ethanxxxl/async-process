@@ -18,18 +18,41 @@
 #include <string.h>
 #include <stdbool.h>
 
-struct process {
-  char buffer[1024*4];
-  int fd;
-  char *pty_name;
-  pid_t pid;
+struct str {
+    char* buf;
+    size_t len;
+    size_t cap;
 };
 
-struct process* create_process(char *const command[], bool nonblock, const char *path);
+int init_str(struct str *str);
+void del_str(struct str *str);
+int str_read_fd(struct str *str, int fd);
+
+struct process {
+    struct str stdout;
+    struct str stderr;
+
+    int fd_io;
+    int fd_er;
+    char *pts_io_name;
+    char *pts_er_name;
+    pid_t pid;
+};
+
+struct process* create_process(char *const command[], const char *path);
 void delete_process(struct process *process);
 int process_pid(struct process *process);
-void process_send_input(struct process *process, const char *string);
-const char* process_receive_output(struct process *process);
+
+void process_write(struct process *process, const char* buf, size_t n);
+void process_write_string(struct process *process, const char *string);
+
+/** receive process stdout.  MUST FREE RETURNED PONTER */
+char* process_receive_stdout(struct process *process);
+/** receive process stderr.  MUST FREE RETURNED PONTER */
+char* process_receive_stderr(struct process *process);
+/** receive process stdout and stderr (one after another).  
+MUST FREE RETURNED PONTER */
+char* process_receive_output(struct process *process);
 int process_alive_p(struct process *process);
 
 #endif
