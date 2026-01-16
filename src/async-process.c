@@ -22,6 +22,8 @@ static struct process* allocate_process(int fd_io,
                                         int pid) {
     int stdout_ret = 0, stderr_ret = 0;
     char *io_str = NULL, *er_str = NULL;
+    size_t io_strlen = strlen(pts_io_name) + 1;
+    size_t er_strlen = strlen(pts_er_name) + 1;
 
     struct process *process = malloc(sizeof(struct process));
     if (process == NULL)
@@ -35,16 +37,16 @@ static struct process* allocate_process(int fd_io,
     if (stderr_ret == -1)
         goto FAILED_MALLOC;
 
-    io_str = malloc(strlen(pts_io_name) + 1);
+    io_str = malloc(io_strlen * sizeof(char));
     if (io_str == NULL)
         goto FAILED_MALLOC;
 
-    er_str = malloc(strlen(pts_er_name) + 1);
+    er_str = malloc(er_strlen * sizeof(char));
     if (er_str == NULL)
         goto FAILED_MALLOC;
 
-    strcpy(io_str, pts_io_name);
-    strcpy(er_str, pts_er_name);
+    memcpy(io_str, pts_io_name, io_strlen);
+    memcpy(er_str, pts_er_name, er_strlen);
 
     process->pts_io_name = io_str;
     process->pts_er_name = er_str;
@@ -67,8 +69,8 @@ void delete_process(struct process *process) {
     kill(process->pid, 9);
     close(process->fd_io);
     close(process->fd_er);
-    free(process->stdout.buf);
-    free(process->stderr.buf);
+    del_str(&process->stdout);
+    del_str(&process->stderr);
     free(process->pts_io_name);
     free(process->pts_er_name);
     free(process);
@@ -101,12 +103,12 @@ int open_pty(int *fdm, int *fds, char **name) {
     if (tmp == NULL) 
         goto FAILED_SETUP;
     
-    size_t tmp_len = strlen(tmp);
+    size_t tmp_len = strlen(tmp) + 1;
     *name = malloc(tmp_len * sizeof(char));
     if (*name == NULL)
         goto FAILED_SETUP;
 
-    memcpy(*name, tmp, tmp_len+1);
+    memcpy(*name, tmp, tmp_len);
     
     *fds = open(*name, O_RDWR | O_NOCTTY);
     if (*fds == -1)
@@ -245,7 +247,7 @@ void process_write(struct process *process, const char *buf, size_t n) {
 int str_read_fd(struct str *str, int fd) {
     int total_read = 0;
     while (true) {
-        // resize buffer if it is too small
+        // resize buffer if it is too small (include space for null terminator)
         if (str->cap - str->len <= 1) {
             char *new_ptr = realloc(str->buf, 2*str->cap);
             if (new_ptr == NULL)
@@ -260,6 +262,7 @@ int str_read_fd(struct str *str, int fd) {
         if (total_read == 0 && n == -1) {
             return -1; // an error occured on first read
         } else if (n <= 0) {
+            str->buf[str->len] = '\0';
             return total_read;
         }
         
