@@ -43,8 +43,8 @@ struct process* create_process(char *const command[], const char *path);
 void delete_process(struct process *process);
 int process_pid(struct process *process);
 
-void process_write(struct process *process, const char* buf, size_t n);
-void process_write_string(struct process *process, const char *string);
+ssize_t process_write(struct process *process, const char* buf, size_t n);
+ssize_t process_write_string(struct process *process, const char *string);
 
 /** receive process stdout.  MUST FREE RETURNED PONTER */
 char* process_receive_stdout(struct process *process);

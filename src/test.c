@@ -7,6 +7,27 @@ int main() {
     struct str s;
     init_str(&s);
 
+    #define TEST_INPUT_SIZE 50000
+    char test_input[TEST_INPUT_SIZE];
+
+    for (size_t i = 0; i < TEST_INPUT_SIZE; i++) {
+        test_input[i] = '0' + (i % 10);
+    }
+    
+    size_t n = 0;
+    while (n != TEST_INPUT_SIZE) {
+        ssize_t bytes = process_write(p, test_input+n, TEST_INPUT_SIZE-n);
+        if (bytes > 0) {
+            printf("writing %d/%d bytes...\n", bytes, n);
+            n += bytes;        
+        } else {
+            printf("error: %s\n", strerror(errno));
+        }
+            
+    }
+    
+    printf("I just attempted to write %d.\nI wrote %d bytes.\n", TEST_INPUT_SIZE, n);
+    
     while (true) {
         int n = str_read_fd(&s, STDIN_FILENO);
         if (n > 0) {
@@ -15,7 +36,7 @@ int main() {
             if (strcmp(s.buf, "exit\n") == 0)
                 break;
         }
-
+        
         char *out = NULL;
         char *err = NULL;
 

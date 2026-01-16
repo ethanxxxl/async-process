@@ -234,12 +234,25 @@ int process_pid(struct process *process) {
     return process->pid;
 }
 
-void process_write_string(struct process *process, const char *string) {
-    write(process->fd_io, string, strlen(string));
+ssize_t process_write_string(struct process *process, const char *string) {
+    return process_write(process, string, strlen(string));
 }
 
-void process_write(struct process *process, const char *buf, size_t n) {
-    write(process->fd_io, buf, n);
+ssize_t process_write(struct process *process, const char *buf, size_t n) {
+    ssize_t bytes_written = 0;
+
+    while (bytes_written < n) {
+        ssize_t sent = write(process->fd_io, buf + bytes_written, n - bytes_written);
+        if (bytes_written != 0 && sent == -1) {
+            return bytes_written;
+        } else if (sent == -1) {
+            return -1;
+        }
+        
+        bytes_written += sent;
+    }
+
+    return bytes_written;
 }
 
 // reads all data available in fd (should be non-blocking) into str,
