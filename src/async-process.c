@@ -20,7 +20,7 @@ static struct process* allocate_process(int fd_io,
                                         const char *pts_io_name,
                                         const char *pts_er_name,
                                         int pid) {
-    int stdout_ret = 0, stderr_ret = 0;
+    int stdout_ret = -1, stderr_ret = -1, both_ret = -1;
     char *io_str = NULL, *er_str = NULL;
     size_t io_strlen = strlen(pts_io_name) + 1;
     size_t er_strlen = strlen(pts_er_name) + 1;
@@ -35,6 +35,10 @@ static struct process* allocate_process(int fd_io,
 
     stderr_ret = init_str(&process->stderr);
     if (stderr_ret == -1)
+        goto FAILED_MALLOC;
+    
+    both_ret = init_str(&process->both);
+    if (both_ret == -1)
         goto FAILED_MALLOC;
 
     io_str = malloc(io_strlen * sizeof(char));
@@ -58,8 +62,9 @@ static struct process* allocate_process(int fd_io,
 
 FAILED_MALLOC:
     if (process != NULL) free(process);
-    if (stdout_ret == -1) del_str(&process->stdout);
-    if (stderr_ret == -1) del_str(&process->stderr);
+    if (stdout_ret != -1) del_str(&process->stdout);
+    if (stderr_ret != -1) del_str(&process->stderr);
+    if (both_ret != -1) del_str(&process->both);
     if (io_str != NULL) free(io_str);
     if (er_str != NULL) free(er_str);
     return NULL;
@@ -71,6 +76,7 @@ void delete_process(struct process *process) {
     close(process->fd_er);
     del_str(&process->stdout);
     del_str(&process->stderr);
+    del_str(&process->both);
     free(process->pts_io_name);
     free(process->pts_er_name);
     free(process);
@@ -234,27 +240,6 @@ int process_pid(struct process *process) {
     return process->pid;
 }
 
-ssize_t process_write_string(struct process *process, const char *string) {
-    return process_write(process, string, strlen(string));
-}
-
-ssize_t process_write(struct process *process, const char *buf, size_t n) {
-    ssize_t bytes_written = 0;
-
-    while (bytes_written < n) {
-        ssize_t sent = write(process->fd_io, buf + bytes_written, n - bytes_written);
-        if (bytes_written != 0 && sent == -1) {
-            return bytes_written;
-        } else if (sent == -1) {
-            return -1;
-        }
-        
-        bytes_written += sent;
-    }
-
-    return bytes_written;
-}
-
 // reads all data available in fd (should be non-blocking) into str,
 // returns number of bytes read on success, -1 on error.
 int str_read_fd(struct str *str, int fd) {
@@ -286,60 +271,97 @@ int str_read_fd(struct str *str, int fd) {
     return -1;  // control flow shouldn't reach here.
 }
 
-char* _process_receive_fd(struct str *s, int fd) {
+const char* _process_receive_fd(struct str *s, int fd) {
     int n = str_read_fd(s, fd);
     if (n == -1)
         return NULL;
 
-    char *ret = malloc((s->len + 1) * sizeof(char));
-    if (ret == NULL)
-        return NULL;
-
-    memcpy(ret, s->buf, s->len);
-    ret[s->len] = '\0';
-
-    s->len = 0;
-    return ret;
+    return s->buf;
 }
 
-char* process_receive_stdout(struct process *p) {
-    return _process_receive_fd(&p->stdout, p->fd_io);
+const char* process_receive_stdout(struct process *p) {
+    const char *r =  _process_receive_fd(&p->stdout, p->fd_io);
+    p->stdout.len = 0;
+    return r;
 }
 
-char* process_receive_stderr(struct process *p) {
-    return _process_receive_fd(&p->stderr, p->fd_er);
+const char* process_receive_stderr(struct process *p) {
+    const char *r =  _process_receive_fd(&p->stderr, p->fd_er);
+    p->stderr.len = 0;
+    return r;
 }
 
-char* process_receive_output(struct process *process) {
-    char *stdout = process_receive_stdout(process);
-    char *stderr = process_receive_stderr(process);
+const char* process_receive_output(struct process *p) {
+    _process_receive_fd(&p->stdout, p->fd_io);
+    _process_receive_fd(&p->stderr, p->fd_er);
 
-    if (stdout == NULL && stderr == NULL)
-        return NULL;
+    // these lengths include null terminators
+    size_t stdout_len = p->stdout.len;
+    size_t stderr_len = p->stderr.len;
 
-    if (stdout != NULL && stderr == NULL)
-        return stdout;
+    if (p->both.cap < (stdout_len + stderr_len)) {
+        char *new_ptr = realloc(p->both.buf, stdout_len + stderr_len);
+        if (new_ptr == NULL)
+            return NULL;
+        p->both.buf = new_ptr;
+        p->both.cap = stdout_len + stderr_len;
+    }
+    
+    // don't copy null terminator
+    if (stdout_len > 0 && p->stdout.buf[stdout_len] == '\0') {
+        stdout_len--;
+    }
 
-    if (stdout == NULL && stderr != NULL)
-        return stderr;
+    memcpy(p->both.buf, p->stdout.buf, stdout_len);
+    memcpy(p->both.buf + stdout_len, p->stderr.buf, stderr_len); // copy null terminator this time.
 
-    size_t o_len = strlen(stdout);
-    size_t e_len = strlen(stderr);
-    size_t length = o_len + e_len + 1;
-    char *ret = malloc(length * sizeof(char));
-    if (ret == NULL)
-        return NULL;
+    p->both.len = 0;
+    p->stdout.len = 0;
+    p->stderr.len = 0;
 
-    memcpy(ret, stdout, o_len);
-    memcpy(ret + o_len, stderr, e_len);
-
-    ret[length] = '\0';
-
-    free(stdout);
-    free(stderr);
-
-    return ret;
+    return p->both.buf;
 }
+
+ssize_t _process_write(struct process *process, const char *buf, size_t n, bool readp) {
+    ssize_t bytes_written = 0;
+
+    while (bytes_written < n) {
+        ssize_t sent = write(process->fd_io, buf + bytes_written, n - bytes_written);
+        
+        if (readp) {
+            _process_receive_fd(&process->stdout, process->fd_io);
+            _process_receive_fd(&process->stderr, process->fd_er);
+        }
+
+        if (bytes_written != 0 && sent == -1) {
+            return bytes_written;
+        } else if (sent == -1) {
+            return -1;
+        }
+        
+        bytes_written += sent;
+    }
+
+    return bytes_written;
+}
+
+ssize_t process_write(struct process *process, const char *buf, size_t n) {
+    return _process_write(process, buf, n, true);
+}
+
+ssize_t process_write_string(struct process *process, const char *string) {
+    return _process_write(process, string, strlen(string), true);
+}
+
+ssize_t process_write_noread(struct process *process, const char *buf, size_t n) {
+    return _process_write(process, buf, n, false);
+}
+
+ssize_t process_write_string_noread(struct process *process, const char *string) {
+    return _process_write(process, string, strlen(string), false);
+}
+
+
 
 int process_alive_p(struct process *process)
 {
