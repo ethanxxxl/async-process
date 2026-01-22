@@ -92,7 +92,8 @@ void my_exit(int status) {
 // respectively.  Name will be malloced and it is the callers responsibility
 // to free name.  On success, return 0.  On fail, returns -1.  All references
 // will also be either initialized or set -1/NULL appropriately.
-int open_pty(int *fdm, int *fds, char **name) {
+// nonblock will set nonblock mode on the master PTY FD if nonblock == true
+int open_pty(int *fdm, int *fds, char **name, bool nonblock) {
     *fdm = -1;
     *fds = -1;
     *name = NULL;
@@ -125,7 +126,9 @@ int open_pty(int *fdm, int *fds, char **name) {
     fcntl(*fds, F_SETFD, FD_CLOEXEC);    
 
     // set master as non-blocking (for get_process_output functions)
-    fcntl(*fdm, F_SETFL, O_NONBLOCK);
+    if (nonblock) {
+        fcntl(*fdm, F_SETFL, O_NONBLOCK);
+    }
 
     // Set raw mode
     struct termios tty;
@@ -146,7 +149,7 @@ FAILED_SETUP:
     return -1;
 }
 
-struct process* create_process(char *const command[], const char *path) {
+struct process* create_process(char *const command[], const char *path, bool nonblock) {
     // Unix PTYs are bi-directional communication streams.  Typically, a terminal will
     // combine stdout and stderr and display them in the same output.  We want to
     // keep the outputs separate at this level so master_pty_er is created just to carry
@@ -159,11 +162,11 @@ struct process* create_process(char *const command[], const char *path) {
     char *pts_io_name, *pts_er_name;
     int ret;
 
-    ret = open_pty(&master_pty_io, &slave_pts_io, &pts_io_name);
+    ret = open_pty(&master_pty_io, &slave_pts_io, &pts_io_name, nonblock);
     if (ret == -1)
         goto FAILED_SETUP;
 
-    ret = open_pty(&master_pty_er, &slave_pts_er, &pts_er_name);
+    ret = open_pty(&master_pty_er, &slave_pts_er, &pts_er_name, nonblock);
     if (ret == -1)
         goto FAILED_SETUP;
 
@@ -254,13 +257,13 @@ int str_read_fd(struct str *str, int fd) {
             str->cap *= 2;
         }
 
-        // read as much data from fd as possible.
+        // read as much data from fd as possible. (read doesn't add '\0')
         int n = read(fd, str->buf + str->len, str->cap - str->len);
         
         if (total_read == 0 && n == -1) {
             return -1; // an error occured on first read
         } else if (n <= 0) {
-            str->buf[str->len] = '\0';
+            str->buf[str->len] = '\0'; // cap is always len+1
             return total_read;
         }
         
@@ -271,49 +274,51 @@ int str_read_fd(struct str *str, int fd) {
     return -1;  // control flow shouldn't reach here.
 }
 
-const char* _process_receive_fd(struct str *s, int fd) {
+const char* _process_receive_fd(struct str *s, int fd, size_t *bytes) {
     int n = str_read_fd(s, fd);
-    if (n == -1)
+
+    if (n == -1 || s->len == 0)
         return NULL;
 
+    if (bytes != NULL)
+        *bytes = s->len; // length of str, not including '\0'
     return s->buf;
 }
 
-const char* process_receive_stdout(struct process *p) {
-    const char *r =  _process_receive_fd(&p->stdout, p->fd_io);
+const char* process_receive_stdout(struct process *p, size_t *bytes) {
+    const char *r =  _process_receive_fd(&p->stdout, p->fd_io, bytes);
     p->stdout.len = 0;
     return r;
 }
 
-const char* process_receive_stderr(struct process *p) {
-    const char *r =  _process_receive_fd(&p->stderr, p->fd_er);
+const char* process_receive_stderr(struct process *p, size_t *bytes) {
+    const char *r =  _process_receive_fd(&p->stderr, p->fd_er, bytes);
     p->stderr.len = 0;
     return r;
 }
 
-const char* process_receive_output(struct process *p) {
-    _process_receive_fd(&p->stdout, p->fd_io);
-    _process_receive_fd(&p->stderr, p->fd_er);
-
+const char* process_receive_output(struct process *p, size_t *bytes) {
     // these lengths include null terminators
-    size_t stdout_len = p->stdout.len;
-    size_t stderr_len = p->stderr.len;
+    size_t stdout_len = 0;
+    size_t stderr_len = 0;
 
-    if (p->both.cap < (stdout_len + stderr_len)) {
+    _process_receive_fd(&p->stdout, p->fd_io, &stdout_len);
+    _process_receive_fd(&p->stderr, p->fd_er, &stderr_len);
+
+    if (p->both.cap < (stdout_len + stderr_len + 1)) {
         char *new_ptr = realloc(p->both.buf, stdout_len + stderr_len);
         if (new_ptr == NULL)
             return NULL;
         p->both.buf = new_ptr;
         p->both.cap = stdout_len + stderr_len;
     }
-    
-    // don't copy null terminator
-    if (stdout_len > 0 && p->stdout.buf[stdout_len] == '\0') {
-        stdout_len--;
-    }
 
     memcpy(p->both.buf, p->stdout.buf, stdout_len);
-    memcpy(p->both.buf + stdout_len, p->stderr.buf, stderr_len); // copy null terminator this time.
+    memcpy(p->both.buf + stdout_len, p->stderr.buf, stderr_len);
+    p->both.buf[stdout_len + stderr_len] = '\0';
+    
+    if (bytes != NULL)
+        *bytes = stdout_len + stderr_len;
 
     p->both.len = 0;
     p->stdout.len = 0;
@@ -329,8 +334,8 @@ ssize_t _process_write(struct process *process, const char *buf, size_t n, bool 
         ssize_t sent = write(process->fd_io, buf + bytes_written, n - bytes_written);
         
         if (readp) {
-            _process_receive_fd(&process->stdout, process->fd_io);
-            _process_receive_fd(&process->stderr, process->fd_er);
+            _process_receive_fd(&process->stdout, process->fd_io, NULL);
+            _process_receive_fd(&process->stderr, process->fd_er, NULL);
         }
 
         if (bytes_written != 0 && sent == -1) {

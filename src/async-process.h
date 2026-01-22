@@ -40,7 +40,7 @@ struct process {
     pid_t pid;
 };
 
-struct process* create_process(char *const command[], const char *path);
+struct process* create_process(char *const command[], const char *path, bool nonblock);
 void delete_process(struct process *process);
 int process_pid(struct process *process);
 
@@ -82,21 +82,21 @@ Returns pointer to a buffer containing data returned by process STDOUT buffer.
 this buffer will be overwritten by subsequent calls to this function; if 
 this output is meant to be kept, it should be copied out.
 */
-const char* process_receive_stdout(struct process *process);
+const char* process_receive_stdout(struct process *process, size_t *bytes);
 
 /** Return Process STDERR.
 Returns pointer to a buffer containing data returned by process STDERR buffer.
 this buffer will be overwritten by subsequent calls to this function; if 
 this output is meant to be kept, it should be copied out.
 */
-const char* process_receive_stderr(struct process *process);
+const char* process_receive_stderr(struct process *process, size_t *bytes);
 
 /** Receive Process STDOUT and STDERR (one after another).
 Returns pointer to a buffer containing data returned by process STDERR and 
 STDOUT buffer. this buffer will be overwritten by subsequent calls to this
  function; if  this output is meant to be kept, it should be copied out.
 */
-const char* process_receive_output(struct process *process);
+const char* process_receive_output(struct process *process, size_t *bytes);
 
 int process_alive_p(struct process *process);
 

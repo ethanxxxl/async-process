@@ -57,7 +57,8 @@
 
 (cffi:defcfun ("create_process" %create-process) :pointer
   (command :pointer)
-  (path :string))
+  (path :string)
+  (noblock :bool))
 
 (cffi:defcfun ("delete_process" %delete-process) :void
   (process :pointer))
@@ -65,30 +66,33 @@
 (cffi:defcfun ("process_pid" %process-pid) :int
   (process :pointer))
 
-(cffi:defcfun ("process_write" %process-write) :void
+(cffi:defcfun ("process_write" %process-write) :ssize
   (process :pointer)
   (string :string)
   (n :size))
 
-(cffi:defcfun ("process_write_string" %process-write-string) :void
+(cffi:defcfun ("process_write_string" %process-write-string) :ssize
   (process :pointer)
   (string :string))
 
-(cffi:defcfun ("process_receive_stdout" %process-receive-stdout) :pointer
-  (process :pointer))
+(cffi:defcfun ("process_receive_stdout" %process-receive-stdout) :string
+  (process :pointer)
+  (bytes :pointer))
 
-(cffi:defcfun ("process_receive_stderr" %process-receive-stderr) :pointer
-  (process :pointer))
+(cffi:defcfun ("process_receive_stderr" %process-receive-stderr) :string
+  (process :pointer)
+  (bytes :pointer))
 
 (cffi:defcfun ("process_receive_output" %process-receive-output) :pointer
-  (process :pointer))
+  (process :pointer)
+  (bytes :pointer))
 
 (cffi:defcfun ("process_alive_p" %process-alive-p) :boolean
   (process :pointer))
 
 (cffi:defcfun "cffi_test" :string)
 
-(defun create-process (command &key (encode cffi:*default-foreign-encoding*) directory)
+(defun create-process (command &key nonblock (encode cffi:*default-foreign-encoding*) directory)
   (when (and directory (not (uiop:directory-exists-p directory)))
     (error "Directory ~S does not exist" directory))
   (let* ((command (uiop:ensure-list command))
@@ -98,9 +102,11 @@
             :for c :in command
             :do (setf (cffi:mem-aref argv :string i) c))
       (setf (cffi:mem-aref argv :string length) (cffi:null-pointer))
-      (let ((p (%create-process argv (if directory
-                                         (namestring directory)
-                                         (cffi:null-pointer)))))
+      (let ((p (%create-process argv 
+                                (if directory
+                                    (namestring directory)
+                                    (cffi:null-pointer))
+                                nonblock)))
         (if (cffi:null-pointer-p p)
             (error "create-process failed: ~S" command)
             (make-instance 'process :process p :encode encode))))))
@@ -115,30 +121,20 @@
   (let ((cffi:*default-foreign-encoding* (process-encode process)))
     (%process-write-string (process-process process) string)))
 
-(defun pointer-to-string (pointer)
-  (unless (cffi:null-pointer-p pointer)
-    (let* ((bytes (loop :for i :from 0
-                        :for code := (cffi:mem-aref pointer :unsigned-char i)
-                        :until (zerop code)
-                        :collect code))
-           (octets (make-array (length bytes)
-                               :element-type '(unsigned-byte 8)
-                               :initial-contents bytes)))
-      (handler-case (babel:octets-to-string octets)
-        (error ()
-          ;; Fallback when an error occurs with UTF-8 encoding
-          (map 'string #'code-char octets))))))
-
 (defun process-receive-output (process &optional (source :both))
-  "`source` can be either `:stdout`, `:stderr`, or `:both`.   It specifies the stream
+  "`source` can be either `:stdout`, `:stderr`, or `:both`.  It specifies the stream
 to read from."
+  (declare (optimize (debug 3)))
   (flet ((call-cfun (read-func)
            "helper function to call one of the three cffi functions for receiving output."
-           (let ((cffi:*default-foreign-encoding* (process-encode process))
-                 (output (funcall read-func (process-process process))))
-             (prog1 
-                 (pointer-to-string output)
-               (cffi:foreign-free output)))))
+           (cffi:with-foreign-pointer (bytes 8)
+             (let ((cffi:*default-foreign-encoding* (process-encode process))
+                   (output (funcall read-func 
+                                    (process-process process)
+                                    bytes)))
+               (cffi:foreign-string-to-lisp 
+                output
+                :count (cffi:mem-ref bytes :size))))))
     
     (case source
       (:stdout (call-cfun '%process-receive-stdout))
