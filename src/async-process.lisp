@@ -49,7 +49,7 @@
   (:unix "libasyncprocess.so")
   (:windows "libasyncprocess.dll"))
 
-(cffi:use-foreign-library #P"/home/ethan/Documents/async-process/.libs/libasyncprocess.so")
+; (cffi:use-foreign-library #P"/home/ethan/Documents/async-process/.libs/libasyncprocess.so")
 
 (defclass process ()
   ((process :reader process-process :initarg :process)
