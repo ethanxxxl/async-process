@@ -19,9 +19,12 @@
                            :ignore-error-status t
                            :output :string)))))))
 
+(format t "~&async process is at: ~A"
+        (asdf:system-relative-pathname "async-process" "."))
+
 (pushnew (asdf:system-relative-pathname
           :async-process
-          (format nil "../static/~A/"
+          (format nil "../.libs/~A/"
                   (cond
                     ;; Windows
                     ((uiop/os:featurep '(:and :windows :x86-64))
@@ -38,18 +41,24 @@
                              (uiop:run-program '("uname" "-m") :output '(:string :stripped t))
                              (let ((os (uiop:run-program '("uname") :output '(:string :stripped t))))
                                (cond ((and (equal os "Linux")
-                                           (ignore-errors (funcall (read-from-string "muslp"))))
+                                           (ignore-errors (funcall (read-from-string "muslp"))))n
                                       "Linux-musl")
                                      (t os))))))))
          cffi:*foreign-library-directories*
          :test #'uiop:pathname-equal)
 
-(cffi:define-foreign-library async-process
-  (:darwin "libasyncprocess.dylib")
-  (:unix "libasyncprocess.so")
-  (:windows "libasyncprocess.dll"))
+(pushnew (asdf:system-relative-pathname "async-process" "../.libs/") cffi:*foreign-library-directories*)
 
-; (cffi:use-foreign-library #P"/home/ethan/Documents/async-process/.libs/libasyncprocess.so")
+;; this binds the library file path to the symbol async-process for use with
+;; `use-foreign-library`
+(format t "~&cffi foreign library status: ~A"
+        (cffi:define-foreign-library async-process
+          (:darwin "libasyncprocess.dylib")
+          (:unix "libasyncprocess.so")
+          (:windows "libasyncprocess.dll")))
+
+;; This currently fails because qlot does not copy the .libs folder over.
+;;(cffi:use-foreign-library async-process)
 
 (defclass process ()
   ((process :reader process-process :initarg :process)
@@ -75,11 +84,11 @@
   (process :pointer)
   (string :string))
 
-(cffi:defcfun ("process_receive_stdout" %process-receive-stdout) :string
+(cffi:defcfun ("process_receive_stdout" %process-receive-stdout) :pointer
   (process :pointer)
   (bytes :pointer))
 
-(cffi:defcfun ("process_receive_stderr" %process-receive-stderr) :string
+(cffi:defcfun ("process_receive_stderr" %process-receive-stderr) :pointer
   (process :pointer)
   (bytes :pointer))
 

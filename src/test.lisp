@@ -29,3 +29,7 @@ asdf:*central-registry*
                              :element-type '(unsigned-byte 8)
                              :initial-element 0))
             (cffi:foreign-string-to-lisp p))))
+
+;;; test which cffi lib is currently loaded.
+(format t "~&---~%~{~A~%~}" (cffi:list-foreign-libraries))
+(format t "~A" (cffi:foreign-library-pathname 'async-process::async-process))
