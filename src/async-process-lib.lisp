@@ -6,7 +6,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; TEMP, for debugging.  This will be handled by ASDF at load time.
 (load (cffi-grovel:process-grovel-file 
-       "/home/ethan/Documents/async-process/src/libc-symbols-grovel.lisp"))
+       "/home/ethanxxxl/Documents/async-process/src/libc-symbols-grovel.lisp"))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -17,9 +17,16 @@
 ;;; to pull in constants/struct definitions used as parameters.
 
 (cffi:defcfun ("setsid" %setsid) :void)
-(cffi:defcfun ("execvp" %execvp) :void)
-(cffi:defcfun ("dup2" %dup2) :void)
-(cffi:defcfun ("fork" %fork) :void)
+(cffi:defcfun ("execvp" %execvp) :int
+  "executes the program at file, with the argument list argv."
+  (file :string)
+  (argv :pointer))
+
+(cffi:defcfun ("dup2" %dup2) :int
+  (oldfd :int)
+  (newfd :int))
+
+(cffi:defcfun ("fork" %fork) :int)
 
 (cffi:defcfun ("open" %open) :int
   (pathname :string)
@@ -47,7 +54,7 @@ CFFI automaticaly does this conversion/copy for us."
   (filedes :int)
   (cmd :int)
   &rest)
-
+:int
 ;; termios struct retrieved by groveler
 (cffi:defcfun ("tcgetattr" %tcgetattr) :int
   (fd :int)
@@ -108,7 +115,6 @@ TODO: figure out the exact semantics of when this needs to be called."
     
     (setf (posix-pty-name pty) ""))
   nil)
-
 
 (defun open-pty (&optional nonblock)
   "opens a PTY and returns a `POSIX-PTY` struct."
@@ -179,14 +185,77 @@ programs.  This is purely to initialize the `posix-process` structure."
                  :path path
                  :nonblockp nonblockp))
 
+(defun close-process (proc)
+  "terminates the process and closes resources associated with it."
+  ;; TODO Terminate Process
+
+  ;; Close PTYs
+  (close-pty (posix-process-stdio-pty proc))
+  (setf (posix-process-stdio-pty proc) nil)
+  
+  (close-pty (posix-process-stder-pty proc))
+  (setf (posix-process-stder-pty proc) nil))
+
+(defun %start-process (proc)
+  "handles the creation of a child process after fork is run."
+  (declare (type posix-process proc))
+  (with-slots (stdio-pty stder-pty command path) proc
+    (%setsid)
+    (%close (posix-pty-fdm stdio-pty))
+    (%close (posix-pty-fdm stder-pty))
+
+    (%dup2 (posix-pty-fds stdio-pty) +stdin-fileno+)
+    (%dup2 (posix-pty-fds stdio-pty) +stdout-fileno+)
+    (%dup2 (posix-pty-fds stder-pty) +stderr-fileno+)
+
+    (if path
+        (uiop:chdir path))
+
+    (cffi:with-foreign-array (argv
+                              (make-array (1- (length command))
+                                          :initial-contents (cdr command))
+                              :string)
+      (cffi:with-foreign-string (cmd (first command))
+        (%execvp cmd argv)))
+
+    ;; If execution reaches here, that means execvp failed in some way.
+    (let ((e *errno*))
+      (if (= e +ENOENT+)
+          (error "No such file or directory: ~A" (first command)))
+      
+      (error (cffi:foreign-funcall "strerror" :int *errno* :string)))))
+
 (defun start-process (proc)
-  (let (()))
-  (cond
-    ((not (setf (posix-process-stdio-pty proc) (open-pty ))))))
+  "Creates a new process (using fork), and starts execution
+of the program."
+  (declare (type posix-process proc))
 
-(defun close-process (posix-process))
+  (unwind-protect
+       (let* ((nonblockp (posix-process-nonblockp proc))
+              (io-pty (open-pty nonblockp))
+              (er-pty (open-pty nonblockp))
+              (pid -1))
 
+         (setf (posix-process-stdio-pty proc) io-pty
+               (posix-process-stder-pty proc) er-pty)
+         
+         (unless (and io-pty er-pty)
+           (error "failed to open pty"))
 
+         ;; Start child process and return it's PID
+          (setf pid (%fork))
+         (if (= pid -1)
+             (error "Failed to Fork"))
+
+         ;; this is the parent process, close slave file descriptors
+         (when (/= pid 0)
+           (%close (posix-pty-fds io-pty))
+           (%close (posix-pty-fds er-pty)))
+
+         ;; this is the child process, initialize and run program
+         (when (= pid 0)
+           (%start-process proc)))
+    (close-process proc)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Testing Functions
@@ -212,3 +281,6 @@ programs.  This is purely to initialize the `posix-process` structure."
     (close-pty test)))
 
 (pty-test "hello world")
+
+(let ((p (make-posix-process '("echo" "Hello" "World") nil nil)))
+  (start-process p))
