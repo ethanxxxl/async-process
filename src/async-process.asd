@@ -7,6 +7,5 @@
   :serial t
   :components ((:file "async-process_windows"
                 :if-feature (:or :win32 :windows))
-               (:file "async-process"
-                :cffi-grovel-file "libc-symbols-grovel"
+               (:file "async-process-uiop"
                 :if-feature (:not (:or :win32 :windows)))))

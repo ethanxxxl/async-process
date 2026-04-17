@@ -1,3 +1,12 @@
+(defpackage :async-process
+  (:use :cl)
+  (:export
+   :delete-process
+   :process-send-input
+   :process-receive-output
+   :process-alive-p
+   :create-process))
+
 (in-package async-process)
 
 (defvar *active-processes* nil
@@ -6,7 +15,8 @@ killed, it can be found in this list.")
 
 (defclass process ()  
   ((info :type uiop:process-info :initarg :info)
-   (nonblockp :type t :initform t :initarg :nonblockp))
+   (nonblockp :type t :initform t :initarg :nonblockp)
+   (command :type string :initarg :command))
   (:documentation "Represents an asynchronous process.  `async-process` used to
 implement bespoke logic for starting processes.  Now, this functionality is
 implemented using `uiop:launch-program` which returns a `process-info` class"))
@@ -20,11 +30,13 @@ be called when process is completed.  Passes arguments to uiop:launch-program.
   (declare (ignore encode))
 
   (let ((proc (make-instance 'process
+                             :command command
                              :nonblockp nonblock
                              :info (apply 'uiop:launch-program
                                           command
                                           :input :stream
-                                          :output :stream 
+                                          :output :stream
+                                          :error-output :stream
                                           keys))))
     
     (push proc *active-processes*)
