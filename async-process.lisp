@@ -67,12 +67,15 @@ be called when process is completed.  Passes arguments to uiop:launch-program.
     (write-string input s)
     (finish-output s)))
 
-(defun process-receive-output (proc)
+(defun process-receive-output (proc &key (errorp nil))
   (declare (type process proc)
            (optimize (debug 3)))
   
   (with-slots (info nonblockp) proc
-    (let ((s (uiop:process-info-output info))
+    (let ((s (if errorp
+                 (uiop:process-info-error-output info)
+                 (uiop:process-info-output info)))
+          
           (blockp (not nonblockp))
           (str-out (make-array 20 
                                :element-type 'character
