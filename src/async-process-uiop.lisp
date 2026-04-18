@@ -70,20 +70,22 @@ be called when process is completed.  Passes arguments to uiop:launch-program.
 (defun process-receive-output (proc)
   (declare (type process proc)
            (optimize (debug 3)))
-
+  
   (with-slots (info nonblockp) proc
-    (let ((s (uiop:process-info-output info)))
-      (unless (and nonblockp (not (listen s)))
-        ;; read output, unless we are nonblocking and there is no data available
-
-        (loop :with v = (make-array 20 
-                                    :element-type 'character
-                                    :adjustable t
-                                    :fill-pointer 0)
-              :for c = (read-char-no-hang s nil nil)
-              :while c
-              :do (vector-push-extend c v)
-              :finally (return v))))))
+    (let ((s (uiop:process-info-output info))
+          (blockp (not nonblockp))
+          (str-out (make-array 20 
+                               :element-type 'character
+                               :adjustable t
+                               :fill-pointer 0)))
+      (when (or blockp (listen s))
+        ;; attempt reading output whenever there is data, or we can block
+        
+        (loop :for c = (read-char-no-hang s nil nil)
+              :while (or (and blockp (= 0 (length str-out)))
+                         c)
+              :do (when c (vector-push-extend c str-out))))
+      str-out)))
    
 
 (defun process-alive-p (proc)
