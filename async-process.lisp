@@ -5,7 +5,10 @@
    :process-send-input
    :process-receive-output
    :process-alive-p
-   :create-process))
+   :create-process
+   :process-input-stream
+   :process-output-stream
+   :with-process))
 
 (in-package async-process)
 
@@ -19,7 +22,10 @@ killed, it can be found in this list.")
    (command :type string :initarg :command))
   (:documentation "Represents an asynchronous process.  `async-process` used to
 implement bespoke logic for starting processes.  Now, this functionality is
-implemented using `uiop:launch-program` which returns a `process-info` class"))
+implemented using `uiop:launch-program` which returns a `process-info` class.
+
+IMPORTANT: You must call `DELETE-PROCESS` on this process before it
+goes out of scope.  Otherwise, system resources will not be properly free'd."))
 
 (defun create-process (command &rest keys &key nonblock
                                     (encode cffi:*default-foreign-encoding*) 
@@ -55,11 +61,13 @@ be called when process is completed.  Passes arguments to uiop:launch-program.
   t)
 
 (defun process-pid (proc)
+  "Returns the process ID for the specified process."
   (declare (type process proc))
 
   (uiop:process-info-pid (slot-value proc 'info)))
 
 (defun process-send-input (proc input)
+  "send the string `INPUT` to the process"
   (declare (type process proc)
            (type string input))
 
@@ -68,8 +76,9 @@ be called when process is completed.  Passes arguments to uiop:launch-program.
     (finish-output s)))
 
 (defun process-receive-output (proc &key (errorp nil))
-  (declare (type process proc)
-           (optimize (debug 3)))
+  "returns a string containing the output of `PROC`.  This defaults to STDOUT.
+if you need the output of STDERR, then set `:ERRORP` to true."
+  (declare (type process proc))
   
   (with-slots (info nonblockp) proc
     (let ((s (if errorp
@@ -92,49 +101,36 @@ be called when process is completed.  Passes arguments to uiop:launch-program.
    
 
 (defun process-alive-p (proc)
+  "Returns T if `PROC` is still running."
   (declare (type process proc))
  
   (uiop:process-alive-p (slot-value proc 'info)))
 
-(defun test-process-output ()
-  (let ((proc (create-process '("echo" "hello" "world") :nonblock nil)))
-    (sleep 0.5)
-    (format t "~&ouptut: ~S" (process-receive-output proc))
-    (delete-process proc)))
 
-(defun test-process-input ()
-  (let ((proc (create-process '("tee") :nonblock nil)))
-    (sleep 0.5)
-    (process-send-input proc "hello world
-")
-    (format t "~&output: ~S" (process-receive-output proc))
-    (delete-process proc)))
+(defun process-input-stream (proc)
+  (declare (type process proc))
+  (uiop:process-info-input (slot-value proc 'info)))
 
-;(test-process-input)
+(defun process-output-stream (proc)
+  (declare (type process proc))
+  (uiop:process-info-output (slot-value proc 'info)))
 
-(defvar *test-proc* nil)
-
-(defun test1 ()
-  (setf *test-proc* (create-process '("tee") :nonblock t)))
-
-(defun test2 ()
-  (process-send-input *test-proc* "hello world
-"))
-(defun test-process-input ()
-  (let ((proc (create-process '("tee") :nonblock nil)))
-    (sleep 0.5)
-    (process-send-input proc "hello world
-")
-    (format t "~&output: ~S" (process-receive-output proc))
-    (delete-process proc)))
-(defun test3 ()
-  (format t "~&~A" (process-receive-output *test-proc*)))
-
-(defun test1-2-cleanup ()
-  (delete-process *test-proc*)
-  (setf *test-proc* nil))
-
-;(test1)
-;(test2)
-;(test3)
-;(test1-2-cleanup)
+(defmacro with-process ((&key name input output)
+                        (&rest create-process-args)
+                        &body body)
+  "Creates a process and runs it in the background while executing `BODY`.  The 
+process object and input/output streams will be bound to `NAME`, `INPUT`, and 
+`OUTPUT`, respectively if specified.  bear in mind that the input and output
+streams are the process input/output streams.  The `CREATE-PROCESS-ARGS` are
+passed to the function create-process to create the new process."
+  (let* ((proc-name (or name (gensym)))
+         (bindings (append
+                    `((,proc-name (funcall 'create-process ,@create-process-args)))
+                    (and input `((,input (process-input-stream ,proc-name))))
+                    (and output `((,output (process-output-stream ,proc-name))))))
+         (stream-cleanup (append (and input `((close ,input)))
+                                 (and output `((close ,output))))))
+    `(let* ,bindings
+       (unwind-protect (progn ,@body)
+         ,@stream-cleanup
+         (delete-process ,proc-name)))))
